@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { render } from 'react-dom';
-import { generateSudoku, cloneSudoku } from './sudoku-lib.js';
+import { isReady } from 'snarkyjs';
 
 // some style params
 let grey = '#cccccc';
@@ -8,74 +8,149 @@ let darkGrey = '#999999';
 let lightGrey = '#f6f6f6';
 let thick = 'black solid 4px';
 let thin = `${grey} solid 1px`;
-let sudokuWidth = 450;
-let rightColumnWidth = 275;
+let rightColumnWidth = 400;
 
-let Sudoku; // this will hold the dynamically imported './sudoku-snapp.ts'
+let SealedBidAuction; // this will hold the dynamically imported './sealed-bid-auction-snapp.ts'
 
 render(<App />, document.querySelector('#root'));
 
 function App() {
-  let [sudoku, setSudoku] = useState([]);
-  let [ease, setEase] = useState(0.5);
+  let [biddersAndBids, setBiddersAndBids] = useState([]);
+  let [bidThreshold, setBidThreshold] = useState(1000000);
+  let [participationCost, setParticipationCost] = useState(10);
 
   let [view, setView] = useState(1);
   let goForward = () => setView(2);
   let goBack = () => setView(1);
+
+  useEffect(
+    () => {
+      (async () => {
+        await isReady;
+        SealedBidAuction = await import('../dist/sealed-bid-auction-snapp.js');
+        const bidders = await SealedBidAuction.generateDummyBidders()
+        biddersAndBids = bidders.map((bidder) => { return { bidder, bid: 0} })
+        setBiddersAndBids(biddersAndBids)
+        console.log(biddersAndBids)
+      })()
+  }
+  , []);
+
   return (
     <Container>
       {view === 1 ? (
-        <GenerateSudoku {...{ setSudoku, ease, setEase, goForward }} />
+        <SnappDeployment {...{
+          biddersAndBids, 
+          setBiddersAndBids,
+          bidThreshold, 
+          setBidThreshold,
+          participationCost, 
+          setParticipationCost,
+          goForward }} />
       ) : (
-        <SolveSudoku {...{ sudoku, goBack }} />
+        <SnappInteraction {...{ 
+          biddersAndBids, 
+          setBiddersAndBids,
+          bidThreshold, 
+          participationCost, 
+          goBack }} />
       )}
     </Container>
   );
 }
 
-function GenerateSudoku({
-  setSudoku: setDeployedSudoku,
-  ease,
-  setEase,
+function SnappDeployment({
+  biddersAndBids,
+  setBiddersAndBids,
+  bidThreshold, 
+  setBidThreshold,
+  participationCost, 
+  setParticipationCost,
   goForward,
 }) {
-  let [sudoku, setSudoku] = useState(() => generateSudoku(1 - ease));
-  useEffect(() => {
-    setSudoku(generateSudoku(1 - ease));
-  }, [ease]);
+
+  if( !biddersAndBids || biddersAndBids.length === 0) {
+    return 'Initializing...'
+  }
 
   let [isLoading, setLoading] = useState(false);
 
   async function deploy() {
     if (isLoading) return;
     setLoading(true);
-    Sudoku = await import('../dist/sudoku-snapp.js');
-    await Sudoku.deploy(sudoku);
+    await isReady;
+    const biddersPublicKeys = biddersAndBids.map((b) => b.bidder.publicKey);
+
+    SealedBidAuction = await import('../dist/sealed-bid-auction-snapp.js');
+    
+    await SealedBidAuction.deploy(
+      biddersPublicKeys, 
+      participationCost, 
+      bidThreshold);
     setLoading(false);
-    setDeployedSudoku(sudoku);
     goForward();
   }
 
   return (
     <Layout>
-      <Header>Step 1. Generate a Sudoku</Header>
+      <Header>Create a 'Sealed Bids Auction' Tender</Header>
 
-      <SudokuTable sudoku={sudoku} />
+      <BiddersTable 
+        biddersAndBids={biddersAndBids}
+        setUpdatedBiddersAndBids={setBiddersAndBids}
+      />
 
       <div style={{ width: rightColumnWidth + 'px' }}>
-        <p>Adjust the difficulty:</p>
-        <Space h="1.5rem" />
-
-        <input
-          type="range"
-          value={ease * 100}
-          style={{ width: '100%' }}
-          onChange={(e) => {
-            setEase(Number(e.target.value) / 100);
-          }}
-        />
-        <Space h="2.5rem" />
-
+        <div>
+          Bids' Threshold
+          <input
+              type="text"
+              value={bidThreshold}
+              style={{
+                margin: '10px',
+                paddingTop: '10px',
+                paddingBottom: '10px',
+                width: '100px',
+                textAlign: 'center',
+                backgroundColor: lightGrey,
+                border: thin,
+                borderColor: 'darkgreen',
+              }}
+              onChange={(e) => {
+                const num = Number(e.target.value);
+                if (Number.isNaN(num)) {setIsAuctionRevealed
+                  e.target.value = '';
+                  return;
+                }
+                setBidThreshold(num);
+              }}
+            ></input>
+        </div>
+        <div>
+          Participation Cost
+          <input
+              type="text"
+              value={participationCost}
+              style={{
+                margin: '10px',
+                paddingTop: '10px',
+                paddingBottom: '10px',
+                width: '100px',
+                textAlign: 'center',
+                backgroundColor: lightGrey,
+                border: thin,
+                borderColor: 'darkgreen',
+              }}
+              onChange={(e) => {
+                const num = Number(e.target.value);
+                if (Number.isNaN(num)) {
+                  e.target.value = '';
+                  return;
+                }
+                setParticipationCost(num);
+              }}
+            ></input>
+        </div>
         <Button onClick={deploy} disabled={isLoading}>
           Deploy
         </Button>
@@ -84,56 +159,70 @@ function GenerateSudoku({
   );
 }
 
-function SolveSudoku({ sudoku, goBack }) {
-  let [solution, setSolution] = useState(sudoku ?? []);
-  let [snappState, pullSnappState] = useSnappState();
+function SnappInteraction({ 
+  biddersAndBids, 
+  setBiddersAndBids,
+  bidThreshold,
+  participationCost,
+  goBack 
+}) {
+  let [solution, setUpdatedBiddersAndBids] = useState(biddersAndBids ?? []);
+  let [snappState, pullSnappState] = useSnappState(biddersAndBids);
 
   let [isLoading, setLoading] = useState(false);
+  let [isAuctionRevealed, setIsAuctionRevealed] = useState(false);
 
   async function submit() {
     if (isLoading) return;
     setLoading(true);
-    await Sudoku.submitSolution(solution);
     await pullSnappState();
     setLoading(false);
+
+    await SealedBidAuction.updateBiddersBalances(biddersAndBids.map(b => b.bidder))
+    biddersAndBids = biddersAndBids.map((elment) => elment)
+    setBiddersAndBids(biddersAndBids)
+    setIsAuctionRevealed(true);
   }
 
   return (
     <Layout>
-      <Header goBack={goBack}>Step 2. Solve the Sudoku</Header>
+      <Header goBack={goBack}>Whitelisted Bidders can Bid</Header>
 
-      <SudokuTable
-        sudoku={sudoku}
-        editable
+      <BiddersTable
+        biddersAndBids={biddersAndBids}
+        editable={!isAuctionRevealed}
         solution={solution}
-        setSolution={setSolution}
+        setUpdatedBiddersAndBids={setUpdatedBiddersAndBids}
       />
 
       <div style={{ width: rightColumnWidth + 'px' }}>
-        <p>Snapp state:</p>
-        <Space h=".5rem" />
-
-        <SnappState state={snappState} />
+        <div 
+          style={{margin: '10px'}}>
+          Bids' Threshold: {bidThreshold}
+        </div>
+        <div
+          style={{margin: '10px'}}>
+          Participation Cost: {participationCost}
+        </div>
+        <Button onClick={submit} disabled={isLoading || isAuctionRevealed}>
+          Reveal & Pay the Winner
+        </Button>
         <Space h="2.5rem" />
 
-        <Button onClick={submit} disabled={isLoading}>
-          Submit solution
-        </Button>
+        <SnappState state={snappState} />
       </div>
     </Layout>
   );
 }
 
-function useSnappState() {
+function useSnappState(biddersAndBids) {
   let [state, setState] = useState();
   let pullSnappState = useCallback(async () => {
-    let state = await Sudoku?.getSnappState();
+    let state = await SealedBidAuction?.revealWinner();
+    state.winner = biddersAndBids.find((b) => state.winner.equals(b.bidder.publicKey).toBoolean())?.bidder.name;
     setState(state);
     return state;
   });
-  useEffect(() => {
-    Sudoku?.getSnappState().then(setState);
-  }, []);
   return [state, pullSnappState];
 }
 
@@ -162,96 +251,183 @@ function Header({ goBack, children }) {
   );
 }
 
-function SudokuTable({ sudoku, editable, solution, setSolution }) {
-  let cellSize = sudokuWidth / 9 + 'px';
-  let fontSize = sudokuWidth / 18 + 'px';
+function BiddersTable({ biddersAndBids, editable, setUpdatedBiddersAndBids}) {
+
+  async function submitABid(bidderIndex, amount) {
+    if (!editable) return;
+    const account = biddersAndBids[bidderIndex].bidder.privateKey;
+    await SealedBidAuction.bid(account, amount);
+
+    biddersAndBids[bidderIndex].isBidSubmitted = true;
+
+    await SealedBidAuction.updateBiddersBalances(biddersAndBids.map(b => b.bidder))
+    biddersAndBids = biddersAndBids.map((elment) => elment);
+    setUpdatedBiddersAndBids(biddersAndBids);
+
+  }
   return (
-    <table
-      style={{
-        border: thin,
-        borderCollapse: 'collapse',
-        fontSize,
-      }}
-    >
-      <tbody>
-        {sudoku.map((row, i) => (
-          <tr key={i}>
-            {row.map((x, j) => (
-              <td
-                key={j}
+      <table
+        style={{
+          borderCollapse: 'collapse',
+          width: '485px',
+          border: '1px solid black',
+        }}
+      >
+        <thead>
+          <tr>
+            <th colSpan='4'>
+              <h3>
+                Sample Whitelist
+              </h3>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <h5
                 style={{
-                  width: cellSize,
-                  height: cellSize,
-                  borderRight: j === 2 || j === 5 ? thick : thin,
-                  borderBottom: i === 2 || i === 5 ? thick : thin,
+                  margin: '10px',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  display: 'flex',
+                }}>
+                Name
+              </h5>
+            </td>
+            <td>
+              <h5
+                style={{
+                  margin: '10px',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  display: 'flex',
+                }}>
+                Balance
+              </h5>
+            </td>
+            <td>
+            </td>
+            <td>
+            </td>
+          </tr>
+          {biddersAndBids.map(({bidder, bid, isBidSubmitted}, i) => (
+            <tr key={i} 
+              style={{
+                height: '100px',
+                border: '1px solid black',
+              }} 
+            >
+              <td
+                style={{
+                  width: '300px',
                 }}
               >
-                {!!x || !editable ? (
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'center',
-                      alignItems: 'center',
-                    }}
-                  >
-                    {x || ''}
-                  </div>
-                ) : (
-                  <input
-                    type="text"
-                    value={solution[i][j] || ''}
-                    style={{
-                      width: '100%',
-                      height: '100%',
-                      textAlign: 'center',
-                      fontSize,
-                      backgroundColor: lightGrey,
-                      border: thin,
-                    }}
-                    onChange={(e) => {
-                      let newSudoku = cloneSudoku(solution);
-                      newSudoku[i][j] = Number(e.target.value);
-                      setSolution(newSudoku);
-                    }}
-                  ></input>
-                )}
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                  }}
+                >
+                  {bidder.name}
+                </div>
               </td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+              <td
+              >
+                <div
+                  style={{
+                    margin: '10px',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    fontSize: '16px',
+                  }}
+                >
+                  <div>
+                  <h5>Initial</h5> {bidder.initialBalance}
+                  </div>
+                  <div>
+                  <h5>Current</h5> {bidder.currentBalance}
+                  </div>
+                </div>
+              </td>
+              <td style={{
+                  padding: '10px',
+                }}>
+                <input
+                  type="text"
+                  disabled={!editable || isBidSubmitted}
+                  value={bid == 0 ? '' : bid}
+                  style={{
+                    paddingTop: '10px',
+                    paddingBottom: '10px',
+                    width: '100px',
+                    textAlign: 'center',
+                    backgroundColor: lightGrey,
+                    border: thin,
+                    borderColor: 'darkgreen',
+                  }}
+                  onChange={(e) => {
+                    bid = Number(e.target.value);
+                    if (Number.isNaN(bid)) {
+                      e.target.value = '';
+                      return;
+                    }
+                    biddersAndBids[i].bid = bid;
+                    const cloned = biddersAndBids.map(item => item);
+                    setUpdatedBiddersAndBids(cloned);
+                  }}
+                ></input>
+              </td>
+              <td style={{
+                  padding: '10px',
+                }}>
+                <Button
+                  onClick={() => submitABid(i, bid)} 
+                  disabled={!editable || isBidSubmitted}
+                >
+                  Bid
+                </Button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
   );
 }
 
 function SnappState({ state = {} }) {
-  let { sudokuHash = '', isSolved = false } = state;
+  const { lowestBid, winner } = state;
   return (
-    <div
+    !lowestBid && <></> || <div
       style={{
         backgroundColor: lightGrey,
         border: thin,
         padding: '8px',
       }}
     >
+
+      <p>Auction finished</p>
+      <Space h=".5rem" />
+      
       <pre style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <b>sudokuHash</b>
+        <b>Lowest Bid</b>
         <span
-          title={sudokuHash}
+          title='Lowest Bid'
           style={{
             width: '100px',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
           }}
         >
-          {sudokuHash}
+          {lowestBid?.toString()}
         </span>
       </pre>
       <Space h=".5rem" />
       <pre style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <b>isSolved</b>
-        <span style={{ color: isSolved ? 'green' : 'red' }}>
-          {isSolved.toString()}
+        <b>Winner</b>
+        <span style={{ color: 'green'}}>
+          {winner?.toString()}
         </span>
       </pre>
     </div>
@@ -271,7 +447,7 @@ function Button({ disabled = false, ...props }) {
         paddingTop: '10px',
         paddingBottom: '10px',
         width: '100%',
-        border: disabled ? `4px ${darkGrey} solid` : '4px black solid',
+        border: disabled ? `4px ${darkGrey} solid` : '4px darkgreen solid',
         boxShadow: `${grey} 3px 3px 3px`,
         cursor: disabled ? undefined : 'pointer',
       }}
@@ -292,7 +468,6 @@ function Container(props) {
         flexDirection: 'column',
         alignItems: 'stretch',
         justifyContent: 'center',
-        padding: '2rem',
       }}
       {...props}
     />

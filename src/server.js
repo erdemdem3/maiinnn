@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
+import { shutdown } from 'snarkyjs';
 
 let defaultHeaders = {
   'content-type': 'text/html',
@@ -34,4 +35,13 @@ let server = http.createServer(async (req, res) => {
 });
 server.listen(3000, () => {
   console.log('server running');
+});
+
+server.on('close', function () {
+  console.log(' shutting down ...');
+  shutdown();
+});
+
+process.on('SIGINT', function () {
+  server.close();
 });
